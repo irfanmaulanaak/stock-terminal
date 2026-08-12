@@ -90,6 +90,13 @@ non-numeric feature vectors are unavailable, never zero-filled. `research/model_
 specifications over Phase 9 folds, fitting once per fold on training rows and scoring only the requested
 validation/test rows.
 
+Phase 12 adds deterministic probability calibration in `research/calibration.py`. It validates complete
+three-way probability vectors, fits horizon-specific one-vs-rest Platt logistic calibrators on validation
+rows, optionally applies temperature scaling, and abstains on invalid probabilities or unavailable horizon
+groups. Its Brier, multiclass log-loss, reliability/ECE, calibration slope/intercept, per-class, and coverage
+metrics are exposed by `research/calibration_report.py`. Walk-forward reports fit the base Phase 11 model on
+train only, calibrate on validation only, and reserve test rows exclusively for evaluation.
+
 Validate a checkpoint and optionally its manifest with:
 
 ```sh

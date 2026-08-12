@@ -208,3 +208,20 @@ optional `splits` array:
 python3 research/model_report.py /path/to/model-config.json
 python3 research/model_report.py - --output /path/to/model-report.json
 ```
+
+## Phase 12 probability calibration
+
+`research.calibration` strictly validates `UP`/`FLAT`/`DOWN` probability vectors and abstains when a
+vector is missing, non-finite, outside `[0, 1]`, incomplete, or does not sum to one. It fits deterministic
+one-vs-rest Platt logistic calibrators, normalizes their outputs, and can subsequently fit one scalar
+temperature. Calibrators are grouped by horizon by default and have versioned, deterministic serialization.
+
+Reports include multiclass Brier score and log loss, reliability bins, expected calibration error, per-class
+binary scores and calibration slope/intercept where applicable, and coverage. Walk-forward calibration fits
+the base model only on Phase 9 train rows, the calibrator only on validation predictions, and evaluates only
+untouched test rows. CLI input is `{rows, probability_source, folds}` with optional `calibrator` and `bins`:
+
+```sh
+python3 research/calibration_report.py /path/to/calibration-config.json
+python3 research/calibration_report.py - --output /path/to/calibration-report.json
+```
