@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { StockChart } from './StockChart'
+import { ResearchPanel } from './ResearchPanel'
 import './styles.css'
 
 type Direction = 'UP' | 'FLAT' | 'DOWN'
@@ -286,6 +287,7 @@ function App() {
   const [pageSize, setPageSize] = useState(10)
   const [page, setPage] = useState(1)
   const [expandedChart, setExpandedChart] = useState<{ symbol: string; area: 'focus' | 'watchlist' } | null>(null)
+  const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
 
   const refreshQuotes = useCallback(async () => {
     setQuoteState('loading')
@@ -445,6 +447,7 @@ function App() {
   }
 
   const toggleChart = (symbol: string, area: 'focus' | 'watchlist') => {
+    setSelectedSymbol(symbol)
     setExpandedChart((current) => current?.symbol === symbol && current.area === area ? null : { symbol, area })
   }
 
@@ -531,6 +534,7 @@ function App() {
                 {!focusRows.length && <div className="empty-state">No UP signals are available for the focus shortlist.</div>}
               </div>
             </section>
+            {selectedSymbol && <ResearchPanel symbol={selectedSymbol} language={language} />}
 
             <details className="methodology-details">
               <summary>How the ranking works</summary>

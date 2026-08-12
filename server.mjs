@@ -28,10 +28,12 @@ const mimeTypes = {
 }
 const quoteCache = new Map()
 const chartCache = new Map()
+const researchCache = new Map()
 const quoteSymbolPattern = /^[A-Z0-9]{1,6}(?:\.JK)?$/
 const chartRanges = new Set(['1d', '5d', '1mo', '3mo', '1y'])
 const chartIntervals = new Set(['5m', '15m', '1h', '1d'])
 const maxQuoteSymbols = 100
+const researchCacheMs = 5 * 60 * 1000
 
 function sendJson(res, status, payload) {
   res.writeHead(status, {
@@ -274,6 +276,100 @@ async function loadQuotes(symbols) {
   return uniqueSymbols.map((symbol) => quoteCache.get(symbol)?.quote).filter(Boolean)
 }
 
+function decodeXml(value = '') {
+  return value.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
+}
+
+function xmlText(block, tag) {
+  const match = block.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, 'i'))
+  return match ? decodeXml(match[1]).replace(/<[^>]+>/g, '').trim() : ''
+}
+
+async function fetchRss(label, query) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 7000)
+  try {
+    const endpoint = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-ID&gl=ID&ceid=ID:en`
+    const response = await fetch(endpoint, { headers: { 'User-Agent': 'stock-analytics-dashboard/1.0' }, signal: controller.signal })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const xml = await response.text()
+    const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)].slice(0, 8).map((match) => {
+      const block = match[1]
+      const publishedAt = xmlText(block, 'pubDate')
+      return { title: xmlText(block, 'title'), url: xmlText(block, 'link'), source: xmlText(block, 'source') || 'Google News', publishedAt: publishedAt && !Number.isNaN(Date.parse(publishedAt)) ? new Date(publishedAt).toISOString() : null }
+    }).filter((item) => item.title && /^https:\/\//.test(item.url))
+    return { label, status: 'available', source: 'Google News RSS', fetchedAt: new Date().toISOString(), items }
+  } catch (error) {
+    return { label, status: 'unavailable', source: 'Google News RSS', fetchedAt: new Date().toISOString(), items: [], message: `Upstream news unavailable: ${error instanceof Error ? error.message : 'request failed'}` }
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+const positiveTerms = /\b(gain|growth|rise|rally|record|profit|upgrade|surge|strong|optimis|naik|untung)\b/i
+const negativeTerms = /\b(loss|fall|drop|risk|cut|weak|decline|slump|probe|lawsuit|turun|rugi)\b/i
+
+function sentimentLayer(name, items, unavailableMessage, fetchedAt) {
+  if (!items.length) return { name, tone: 'unavailable', regime: 'insufficient data', impact: unavailableMessage, confidence: 'low', observations: 0, source: 'Google News RSS', fetchedAt }
+  let score = 0
+  for (const item of items) score += positiveTerms.test(item.title) ? 1 : negativeTerms.test(item.title) ? -1 : 0
+  const tone = score > 0 ? 'positive' : score < 0 ? 'negative' : 'neutral'
+  const regime = Math.abs(score) >= 3 ? 'directional' : 'mixed'
+  const confidence = items.length >= 6 && Math.abs(score) >= 2 ? 'medium' : 'low'
+  return { name, tone, regime, impact: `Headline tone is ${tone}; treat as context pending fundamental verification.`, confidence, observations: items.length, source: 'Google News RSS', fetchedAt }
+}
+
+async function fetchMarketContext(symbol, yahooSymbol, name) {
+  try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 7000)
+    const response = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?range=5d&interval=1d`, { headers: { 'User-Agent': 'stock-analytics-dashboard/1.0' }, signal: controller.signal })
+    clearTimeout(timeout)
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const body = await response.json()
+    const bars = normalizeChartBars(body?.chart?.result?.[0])
+    const first = bars[0]?.close
+    const last = bars.at(-1)?.close
+    const changePct = first && last ? ((last - first) / first) * 100 : null
+    const tone = changePct === null ? 'neutral' : changePct > 0.5 ? 'positive' : changePct < -0.5 ? 'negative' : 'neutral'
+    return { name, tone, regime: changePct === null ? 'insufficient data' : `${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}% / 5d`, impact: `${symbol} may be influenced by this market backdrop.`, confidence: changePct === null ? 'low' : 'medium', observations: bars.length, source: `Yahoo Finance chart (${yahooSymbol})`, fetchedAt: new Date().toISOString() }
+  } catch {
+    return { name, tone: 'unavailable', regime: 'insufficient data', impact: 'Yahoo market context is temporarily unavailable.', confidence: 'low', observations: 0, source: `Yahoo Finance chart (${yahooSymbol})`, fetchedAt: new Date().toISOString() }
+  }
+}
+
+async function loadResearch(symbol) {
+  const cached = researchCache.get(symbol)
+  if (cached && Date.now() - cached.at < researchCacheMs) return cached.payload
+  const fetchedAt = new Date().toISOString()
+  const [company, indonesia, global, indonesiaMarket, globalMarket] = await Promise.all([
+    fetchRss('company', `"${symbol}" IDX OR "${symbol}.JK" when:14d`),
+    fetchRss('indonesia', 'Indonesia stock market IHSG economy when:7d'),
+    fetchRss('global', 'global markets central banks commodities Asia when:7d'),
+    fetchMarketContext(symbol, '^JKSE', 'Indonesia market'),
+    fetchMarketContext(symbol, '^GSPC', 'Global'),
+  ])
+  const sectorItems = company.items
+  const sources = [company, indonesia, global].map(({ label, status, source, fetchedAt: sourceFetchedAt, message, items }) => ({ label, status, source, fetchedAt: sourceFetchedAt, itemCount: items.length, ...(message ? { message } : {}) }))
+  const payload = {
+    symbol, yahooSymbol: `${symbol}.JK`, fetchedAt, cacheTtlSeconds: researchCacheMs / 1000,
+    freshness: 'Runtime fetch; news queries cover the last 7–14 days.',
+    news: company.items.slice(0, 6), sources,
+    layers: [
+      globalMarket.observations ? globalMarket : sentimentLayer('Global', global.items, 'Global context sources are temporarily unavailable.', global.fetchedAt),
+      indonesiaMarket.observations ? indonesiaMarket : sentimentLayer('Indonesia market', indonesia.items, 'Indonesia market sources are temporarily unavailable.', indonesia.fetchedAt),
+      sentimentLayer('Sector', sectorItems, 'No reliable sector-specific items were discovered for this ticker.', company.fetchedAt),
+      sentimentLayer('Company', company.items, 'No current company headlines were discovered; no sentiment was inferred.', company.fetchedAt),
+    ],
+    unavailable: company.items.length ? null : 'No current company headlines are available from the public source. No placeholder headlines were generated.',
+    disclaimer: 'Sentiment is analytical context, not investment advice.',
+  }
+  researchCache.set(symbol, { at: Date.now(), payload })
+  return payload
+}
+
 async function serveStatic(res, pathname) {
   let decoded
   try {
@@ -365,6 +461,16 @@ const server = createServer(async (req, res) => {
         console.warn(`Chart request failed for ${request.symbol}`, error instanceof Error ? error.message : error)
         sendJson(res, 502, { error: 'Chart data is temporarily unavailable from Yahoo Finance.' })
       }
+      return
+    }
+    if (url.pathname === '/api/research') {
+      const rawSymbol = url.searchParams.get('symbol')
+      const symbol = rawSymbol ? normalizeQuoteSymbol(rawSymbol) : null
+      if (!symbol) {
+        sendJson(res, 400, { error: 'symbol must be an IDX ticker such as BBCA or BBCA.JK.' })
+        return
+      }
+      sendJson(res, 200, await loadResearch(symbol))
       return
     }
     await serveStatic(res, url.pathname)
