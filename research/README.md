@@ -48,3 +48,16 @@ The CLI accepts either one `{as_of, quote, bars}` object or `{as_of, observation
 python3 research/quality_report.py /path/to/observations.json
 python3 research/quality_report.py - --output /path/to/report.json
 ```
+
+## Phase 3 features
+
+`research.features` builds deterministic checkpoint feature vectors from canonical OHLCV bars and a checkpoint quote. It includes configurable multi-horizon decimal returns; opening gap; normalized range and rolling return volatility; ATR-like average true range; close location; distance to rolling highs and lows; five-bar momentum and one-bar reversal; volume ratio; turnover; and price/volume interaction.
+
+All calculations are trailing-only. Bars are normalized and sorted, and any bar later than the quote timestamp is excluded. A rolling value is `null` until its entire history window is present; the builder never shortens a requested window. Volatility is population standard deviation, ATR-like range is normalized by the latest completed close, and quote volume is compared with the positive-volume completed-bar average.
+
+The CLI accepts either `{quote, bars}` or `{observations: [{symbol, quote, bars}]}`. Optional top-level `return_horizons`, `rolling_windows`, and `atr_window` values override the defaults:
+
+```sh
+python3 research/features_report.py /path/to/observations.json
+python3 research/features_report.py - --output /path/to/features.json
+```
