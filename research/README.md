@@ -85,3 +85,23 @@ The transparent regime classifier signs six components: long-horizon IHSG trend,
 python3 research/indonesia_regime_report.py /path/to/regime-input.json
 python3 research/indonesia_regime_report.py - --output /path/to/regime-report.json
 ```
+
+## Phase 6 global regime
+
+`research.global_regime` builds a deterministic, point-in-time global market report for explicitly named
+global equity indices, VIX, DXY, US 2-year and 10-year yields, and oil, coal, nickel, copper, gold, palm-oil,
+and tin prices. Price and index changes are decimal returns; yield changes are percentage-point differences
+and are also reported in basis points. Every series includes multi-horizon changes, population return
+volatility, and availability metadata. A horizon of `n` requires `n + 1` eligible observations.
+
+The root `as_of` and every `observed_at` must be timezone-aware. Future, unstamped, malformed, and missing
+observations never enter calculations. `symbol_exposures` take precedence over `sector_exposures`; a sector
+exposure is used only through an explicit `sector_mapping`. Unknown symbols, sectors, and individual USD,
+risk, or commodity sensitivities remain `null`. Interaction signals multiply the explicit sensitivity by the
+signed DXY, global-risk, or named-commodity move at `signal_horizon`; they do not infer an exposure or fill a
+missing market signal.
+
+```sh
+python3 research/global_regime_report.py /path/to/global-input.json
+python3 research/global_regime_report.py - --output /path/to/global-report.json
+```

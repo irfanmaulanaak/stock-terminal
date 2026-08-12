@@ -59,6 +59,8 @@ Phase 4 adds standard-library-only relative-strength research: benchmark-relativ
 
 Phase 5 adds a standard-library-only Indonesia regime report covering multi-horizon IHSG trend and volatility, breadth, foreign flow and acceleration, USD/IDR, BI-rate changes, macro-event freshness, and a transparent risk-on/neutral/risk-off score. Its CLI, `research/indonesia_regime_report.py`, requires a timezone-aware checkpoint and timestamp on every observation. Future inputs are excluded, while missing or invalid inputs remain `null` with availability metadata.
 
+Phase 6 adds a standard-library-only global regime report for global equities, VIX, DXY, US 2-year/10-year yields, and seven explicitly named commodities. It calculates timestamp-gated multi-horizon changes and volatility and applies only explicit symbol or sector USD/risk/commodity exposures. Its CLI is `research/global_regime_report.py`; future observations are excluded and unknown sources, mappings, and sensitivities remain `null`.
+
 Validate a checkpoint and optionally its manifest with:
 
 ```sh
