@@ -75,6 +75,15 @@ function percent(value) {
   return Math.abs(value) <= 1 ? value * 100 : value
 }
 
+function finiteNumber(value) {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
+function stringValue(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
 function textPercent(raw, terms) {
   const match = raw.match(new RegExp(`(?:${terms})[^\\d%]{0,48}(\\d+(?:\\.\\d+)?)\\s*%?`, 'i'))
   return match ? percent(Number(match[1])) : null
@@ -95,20 +104,44 @@ function parseVerification(raw, path) {
   let directionalAccuracy = numberFrom(flat, ['directional_accuracy', 'directionalAccuracy', 'direction_accuracy'])
   let correct = numberFrom(flat, ['correct', 'correct_predictions', 'correctPredictions', 'hits'])
   let evaluated = numberFrom(flat, ['evaluated', 'total', 'sample_count', 'sampleCount', 'n'])
+  let balancedAccuracy = numberFrom(flat, ['balanced_accuracy_pct', 'balanced_accuracy', 'balancedAccuracy'])
+  let macroF1 = numberFrom(flat, ['macro_f1_pct', 'macro_f1', 'macroF1'])
+  let mae = numberFrom(flat, ['target_mae_pct', 'target_mae', 'mae', 'mean_absolute_error'])
+  let brier = numberFrom(flat, ['brier_score', 'brier'])
+  let ece = numberFrom(flat, ['expected_calibration_error', 'ece'])
+  let coverage = numberFrom(flat, ['coverage_pct', 'coverage'])
 
   if (!isJson) {
     accuracy ??= textPercent(raw, 'overall accuracy|accuracy|hit rate|correctness')
     directionalAccuracy ??= textPercent(raw, 'directional accuracy|direction accuracy')
+    balancedAccuracy ??= textPercent(raw, 'balanced accuracy')
+    macroF1 ??= textPercent(raw, 'macro[ -]?f1')
+    coverage ??= textPercent(raw, 'coverage')
+    const maeMatch = raw.match(/(?:target(?:-return)?\s+mae|\bmae)[^\d]{0,32}(\d+(?:\.\d+)?)/i)
+    mae ??= maeMatch ? Number(maeMatch[1]) : null
+    const brierMatch = raw.match(/(?:brier(?: score)?)[^\d]{0,32}(0?\.\d+|\d+(?:\.\d+)?)/i)
+    brier ??= brierMatch ? Number(brierMatch[1]) : null
+    const eceMatch = raw.match(/(?:expected calibration error|\bece\b)[^\d]{0,32}(0?\.\d+|\d+(?:\.\d+)?)/i)
+    ece ??= eceMatch ? Number(eceMatch[1]) : null
     const count = raw.match(/(\d+)\s*(?:\/|of)\s*(\d+)/i)
     correct ??= count ? Number(count[1]) : null
     evaluated ??= count ? Number(count[2]) : null
+    const evaluatedMatch = raw.match(/(?:evaluated transitions\s*\/\s*symbol outcomes|evaluated symbols)[^\d]{0,48}(\d+)/i)
+    evaluated ??= evaluatedMatch ? Number(evaluatedMatch[1]) : null
   }
   if (accuracy === null && correct !== null && evaluated) accuracy = (correct / evaluated) * 100
+  accuracy = percent(accuracy)
+  directionalAccuracy = percent(directionalAccuracy)
+  balancedAccuracy = percent(balancedAccuracy)
+  macroF1 = percent(macroF1)
+  coverage = percent(coverage)
+  const hasEvaluation = evaluated !== null && evaluated > 0
 
   return {
-    path,
     format: isJson ? 'JSON' : 'Markdown',
-    metrics: { accuracy, directionalAccuracy, correct, evaluated },
+    status: hasEvaluation ? 'available' : 'pending',
+    message: hasEvaluation ? null : 'No valid next-checkpoint outcomes are available for evaluation.',
+    metrics: { accuracy, directionalAccuracy, balancedAccuracy, macroF1, mae, brier, ece, coverage, correct, evaluated },
   }
 }
 
@@ -127,6 +160,81 @@ async function readVerification() {
 async function loadDashboard() {
   const forecast = await readForecast()
   return { forecast, verification: await readVerification() }
+}
+
+function auditDataQuality(forecast) {
+  const ages = (Array.isArray(forecast?.stocks) ? forecast.stocks : [])
+    .map((stock) => finiteNumber(stock?.quote_freshness_seconds)).filter((value) => value !== null)
+  const staleAfterSeconds = 900
+  return {
+    status: ages.length ? (ages.some((age) => age > staleAfterSeconds) ? 'stale' : 'available') : 'unavailable',
+    observedSymbols: ages.length,
+    minQuoteAgeSeconds: ages.length ? Math.min(...ages) : null,
+    maxQuoteAgeSeconds: ages.length ? Math.max(...ages) : null,
+    staleAfterSeconds,
+    staleSymbolCount: ages.filter((age) => age > staleAfterSeconds).length,
+    caveat: 'Freshness is copied from the saved forecast snapshot and may differ from independently refreshed live quotes.',
+  }
+}
+
+function sanitizeForecastAudit(forecast, verification) {
+  if (!forecast || typeof forecast !== 'object') {
+    return { status: 'unavailable', message: 'Forecast audit metadata is unavailable.', forecast: null, verification: verification || null }
+  }
+  const stocks = (Array.isArray(forecast.stocks) ? forecast.stocks : []).map((stock) => {
+    const probabilities = stock?.probabilities && typeof stock.probabilities === 'object'
+      ? Object.fromEntries(['UP', 'FLAT', 'DOWN'].map((label) => [label, finiteNumber(stock.probabilities[label])]))
+      : null
+    return {
+      symbol: stringValue(stock?.symbol), forecast: stringValue(stock?.forecast),
+      confidence: stringValue(stock?.confidence), probabilities,
+      modifier: stringValue(stock?.forecast_modifier), sentimentConflict: typeof stock?.sentiment_conflict === 'boolean' ? stock.sentiment_conflict : null,
+      baselineTimestamp: stringValue(stock?.baseline_timestamp), quoteFreshnessSeconds: finiteNumber(stock?.quote_freshness_seconds),
+    }
+  }).filter((stock) => stock.symbol)
+  return {
+    status: 'available', message: null,
+    forecast: {
+      asOf: stringValue(forecast.as_of), horizon: stringValue(forecast.forecast_horizon), checkpoint: stringValue(forecast.snapshot_slot),
+      modelVersion: stringValue(forecast.model_version), featureVersion: stringValue(forecast.feature_version), calibrationVersion: stringValue(forecast.calibration_version),
+      universeCount: finiteNumber(forecast.universe_count), thresholdPct: finiteNumber(forecast.actual_threshold_pct), dataQuality: auditDataQuality(forecast), stocks,
+    },
+    verification: verification || { status: 'unavailable', message: 'Verification report is not mounted.', format: null, metrics: null },
+  }
+}
+
+async function loadAudit() {
+  let verification = await readVerification()
+  try {
+    return sanitizeForecastAudit(await readForecast(), verification)
+  } catch {
+    return { status: 'unavailable', message: 'Forecast audit source is not available or is invalid.', forecast: null, verification: verification || { status: 'unavailable', message: 'Verification report is not mounted.', format: null, metrics: null } }
+  }
+}
+
+async function loadMethodology() {
+  const audit = await loadAudit()
+  return {
+    status: 'available',
+    versions: {
+      model: { implementation: 'phase11-1.0', activeArtifact: audit.forecast?.modelVersion || null, status: audit.forecast?.modelVersion ? 'available' : 'unavailable' },
+      features: { implementation: null, activeArtifact: audit.forecast?.featureVersion || null, status: audit.forecast?.featureVersion ? 'available' : 'unavailable' },
+      calibration: { implementation: 'phase12-1.0', activeArtifact: audit.forecast?.calibrationVersion || null, status: audit.forecast?.calibrationVersion ? 'available' : 'unavailable' },
+      archiveSchema: '1.0',
+    },
+    checkpointHorizons: ['close 16:01 WIB → next trading-day open 09:01 WIB', 'open 09:01 WIB → break 12:01 WIB', 'break 12:01 WIB → close 16:01 WIB'],
+    metricDefinitions: {
+      accuracy: 'Share of evaluated outcomes whose three-way UP/FLAT/DOWN class matches.',
+      balancedAccuracy: 'Mean recall across outcome classes that have support.', macroF1: 'Mean class F1 across classes that have support.',
+      mae: 'Mean absolute error between target and realized return, in percentage points.', brier: 'Mean squared error of the full three-way probability vector; lower is better.',
+      ece: 'Expected calibration error between confidence and observed accuracy; lower is better.', coverage: 'Evaluated valid outcomes divided by eligible forecasts.',
+    },
+    dataSeparationPolicy: 'Chronological only: base models fit on training rows, calibration fits on validation rows, and test rows are reserved exclusively for evaluation; horizon-aware purging and embargoes prevent lookahead.',
+    staleDataCaveat: 'Saved forecast inputs can be delayed or stale. Snapshot freshness does not imply current market freshness, and live quote refreshes are independent.',
+    disclaimer: 'Read-only analytical context. Not for trade execution and not investment advice.',
+    forecastHealth: audit.forecast ? audit.forecast.dataQuality : { status: 'unavailable' },
+    evaluationCoverage: audit.verification?.metrics ? { status: audit.verification.status, evaluated: audit.verification.metrics.evaluated, coveragePct: audit.verification.metrics.coverage } : { status: 'unavailable', evaluated: null, coveragePct: null },
+  }
 }
 
 function normalizeQuoteSymbol(raw) {
@@ -419,6 +527,14 @@ const server = createServer(async (req, res) => {
   try {
     if (url.pathname === '/api/health') {
       sendJson(res, 200, { ok: true, service: 'stock-analytics-dashboard' })
+      return
+    }
+    if (url.pathname === '/api/audit') {
+      sendJson(res, 200, await loadAudit())
+      return
+    }
+    if (url.pathname === '/api/methodology') {
+      sendJson(res, 200, await loadMethodology())
       return
     }
     if (url.pathname === '/api/dashboard') {

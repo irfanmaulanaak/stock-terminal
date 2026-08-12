@@ -39,6 +39,8 @@ The second volume is optional; omit it when the verification report has not been
 
 - `GET /api/health` — local service check.
 - `GET /api/dashboard` — forecast data plus normalized optional verification metrics.
+- `GET /api/audit` — sanitized, read-only checkpoint/as-of/horizon, declared artifact versions, confidence/probability/modifier, snapshot freshness, and verification metrics. It never returns raw archives, filesystem paths, credentials, embedded research narratives, or research URLs. Missing inputs use explicit `unavailable`/`pending` states.
+- `GET /api/methodology` — implementation and active-artifact version status, checkpoint horizons, metric definitions, chronological data-separation policy, stale-data caveat, disclaimer, and available health/coverage. Implementation versions do not claim that the active forecast used that model or calibrator; undeclared active versions remain unavailable.
 - `GET /api/quotes` — read-only quotes for every forecast symbol using Yahoo Finance's chart endpoint. Pass `?symbols=BBCA,BNBR,ELTY,PRDL` to request valid IDX tickers outside the forecast universe; the optional `.JK` suffix is accepted. Malformed symbols are rejected with HTTP 400. Results are briefly cached per symbol to avoid unnecessary refresh bursts.
 - `GET /api/chart?symbol=BBCA&range=3mo&interval=1d` — normalized OHLCV history for the expandable chart. Supported ranges are `1d`, `5d`, `1mo`, `3mo`, and `1y`; supported intervals are `5m`, `15m`, `1h`, and `1d`. Ticker, range, and interval values are strictly validated and the response includes Yahoo source and fetch metadata.
 - `GET /api/research?symbol=BBCA` — runtime-only research context for one strictly validated IDX ticker. It normalizes company headlines discovered through Google News RSS plus Indonesia/global market context from public Yahoo Finance chart data into four analytical layers (Global, Indonesia market, Sector, and Company). Responses include source status, fetch time, freshness, observation counts, and explicit unavailable states. Results are cached in server memory for five minutes and are never written to disk.
@@ -96,6 +98,10 @@ rows, optionally applies temperature scaling, and abstains on invalid probabilit
 groups. Its Brier, multiclass log-loss, reliability/ECE, calibration slope/intercept, per-class, and coverage
 metrics are exposed by `research/calibration_report.py`. Walk-forward reports fit the base Phase 11 model on
 train only, calibrate on validation only, and reserve test rows exclusively for evaluation.
+
+Phase 13 adds the sanitized transparency endpoints and localized EN/ID/MY/CN forecast-audit, verification,
+and methodology panels. Metrics render only when present in the mounted verification source; a report with
+no valid denominator remains pending. Run its deterministic API contract test with `npm run test:phase13`.
 
 Validate a checkpoint and optionally its manifest with:
 

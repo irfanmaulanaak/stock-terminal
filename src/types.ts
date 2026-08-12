@@ -28,10 +28,17 @@ export interface Forecast {
 }
 
 export interface Verification {
-  path: string
   format: string
-  metrics: { accuracy: number | null; directionalAccuracy: number | null; correct: number | null; evaluated: number | null }
+  status: 'available' | 'pending' | 'unavailable'
+  message: string | null
+  metrics: VerificationMetrics
 }
+
+export interface VerificationMetrics { accuracy: number | null; directionalAccuracy: number | null; balancedAccuracy: number | null; macroF1: number | null; mae: number | null; brier: number | null; ece: number | null; coverage: number | null; correct: number | null; evaluated: number | null }
+export interface AuditStock { symbol: string; forecast: string | null; confidence: string | null; probabilities: Record<string, number | null> | null; modifier: string | null; sentimentConflict: boolean | null; baselineTimestamp: string | null; quoteFreshnessSeconds: number | null }
+export interface DataQuality { status: string; observedSymbols: number; minQuoteAgeSeconds: number | null; maxQuoteAgeSeconds: number | null; staleAfterSeconds: number; staleSymbolCount: number; caveat: string }
+export interface AuditPayload { status: string; message: string | null; forecast: null | { asOf: string | null; horizon: string | null; checkpoint: string | null; modelVersion: string | null; featureVersion: string | null; calibrationVersion: string | null; universeCount: number | null; thresholdPct: number | null; dataQuality: DataQuality; stocks: AuditStock[] }; verification: Verification }
+export interface MethodologyPayload { status: string; versions: Record<string, unknown>; checkpointHorizons: string[]; metricDefinitions: Record<string, string>; dataSeparationPolicy: string; staleDataCaveat: string; disclaimer: string; forecastHealth: DataQuality | { status: string }; evaluationCoverage: { status: string; evaluated: number | null; coveragePct: number | null } }
 
 export interface DashboardPayload { forecast: Forecast; verification: Verification | null }
 

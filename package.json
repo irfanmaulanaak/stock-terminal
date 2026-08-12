@@ -7,6 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "api": "node server.mjs",
     "build": "tsc --noEmit && vite build",
+    "test:phase13": "node --test test/phase13.test.mjs",
     "preview": "vite preview --host 0.0.0.0 --port 4173",
     "start": "node server.mjs"
   },

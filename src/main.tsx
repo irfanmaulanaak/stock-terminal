@@ -3,8 +3,9 @@ import { createRoot } from 'react-dom/client'
 import { FocusSignals } from './components/FocusSignals'
 import { PortfolioView } from './components/PortfolioView'
 import { WatchlistView } from './components/WatchlistView'
+import { TransparencyPanel } from './components/TransparencyPanel'
 import { tr } from './i18n'
-import type { DashboardPayload, DashboardView, FocusRow, Language, PortfolioRow, Quote, QuotePayload, QuoteState, Row } from './types'
+import type { AuditPayload, DashboardPayload, DashboardView, FocusRow, Language, MethodologyPayload, PortfolioRow, Quote, QuotePayload, QuoteState, Row } from './types'
 import { focusScore, formatDate, formatPercent, formatPrice, livePriceFor, portfolioPositions, portfolioSymbols, statusFor } from './utils'
 import './styles.css'
 
@@ -23,6 +24,10 @@ function App() {
   const [lastRefresh, setLastRefresh] = useState<string | null>(null)
   const [expandedChart, setExpandedChart] = useState<{ symbol: string; area: 'focus' | 'watchlist' } | null>(null)
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
+  const [audit, setAudit] = useState<AuditPayload | null>(null)
+  const [methodology, setMethodology] = useState<MethodologyPayload | null>(null)
+  const [transparencyLoading, setTransparencyLoading] = useState(true)
+  const [transparencyError, setTransparencyError] = useState('')
 
   const refreshQuotes = useCallback(async () => {
     setQuoteState('loading')
@@ -67,6 +72,22 @@ function App() {
     const interval = window.setInterval(() => void refreshQuotes(), 60000)
     return () => window.clearInterval(interval)
   }, [loadDashboard, refreshQuotes])
+  useEffect(() => {
+    let active = true
+    const loadTransparency = async () => {
+      setTransparencyLoading(true); setTransparencyError('')
+      try {
+        const [auditResponse, methodologyResponse] = await Promise.all([fetch('/api/audit'), fetch('/api/methodology')])
+        const [auditPayload, methodologyPayload] = await Promise.all([auditResponse.json(), methodologyResponse.json()])
+        if (!auditResponse.ok || !methodologyResponse.ok) throw new Error(auditPayload.error || methodologyPayload.error || 'Request failed')
+        if (active) { setAudit(auditPayload as AuditPayload); setMethodology(methodologyPayload as MethodologyPayload); setTransparencyLoading(false) }
+      } catch (caught) {
+        if (active) { setTransparencyError(caught instanceof Error ? caught.message : 'Request failed'); setTransparencyLoading(false) }
+      }
+    }
+    void loadTransparency()
+    return () => { active = false }
+  }, [])
 
   const rows = useMemo<Row[]>(() => data?.forecast.stocks.map((stock) => {
     const quote = quotes[stock.symbol]
@@ -104,6 +125,7 @@ function App() {
     <div className="workspace-layout"><div className="primary-column">{view === 'watchlist' ? <><FocusSignals language={language} rows={focusRows} expanded={expandedChart?.area === 'focus' ? expandedChart.symbol : null} selectedSymbol={selectedSymbol} onToggle={(symbol) => toggleChart(symbol, 'focus')} /><WatchlistView language={language} rows={rows} universeCount={forecast.universe_count} {...commonQuoteProps} expanded={expandedChart?.area === 'watchlist' ? expandedChart.symbol : null} onToggle={(symbol) => toggleChart(symbol, 'watchlist')} onClearExpanded={clearWatchlistChart} /></> : <PortfolioView language={language} rows={weightedRows} currentValue={currentValue} investedTotal={investedTotal} pnl={portfolioPnl} pnlPct={portfolioPnl === null ? null : portfolioPnl / investedTotal * 100} {...commonQuoteProps} />}</div>
       <aside className="context-column" aria-label="Market context"><section className="context-block benchmark-block"><div className="section-kicker">{tr(language, 'benchmark')} / {forecast.benchmark.symbol}</div><div className="benchmark-value">{formatPrice(forecast.benchmark.displayed_price)}</div><div className="positive">{formatPercent(forecast.benchmark.displayed_change_pct)} today</div><span className="context-note">Forecast threshold ±{forecast.actual_threshold_pct.toFixed(2)}%</span></section>{view === 'watchlist' && <><section className="context-block"><div className="section-kicker">SIGNAL MIX</div><div className="signal-counts"><span className="positive"><strong>{counts.UP}</strong> UP</span><span className="neutral"><strong>{counts.FLAT}</strong> FLAT</span><span className="negative"><strong>{counts.DOWN}</strong> DOWN</span></div></section><section className="context-block"><div className="section-kicker">VERIFICATION</div><div className="context-value">{verification?.metrics.accuracy == null ? 'Pending' : `${verification.metrics.accuracy.toFixed(1)}%`}</div><span className="context-note">{verification ? `${verification.metrics.evaluated ?? '—'} observations scored` : 'Mount report to score forecasts'}</span></section></>}<section className="context-block context-footnote"><div className="section-kicker">READ-ONLY CONTEXT</div><p>Forecasts are saved snapshots. Live prices refresh independently from Yahoo Finance.</p><span className="context-note">As of {formatDate(forecast.as_of)} UTC+7</span></section></aside>
     </div>
+    <TransparencyPanel language={language} audit={audit} methodology={methodology} loading={transparencyLoading} error={transparencyError} />
     <footer><span>Source · {forecast.source}</span><span>{verification ? `Verification · ${verification.format} report mounted` : 'Verification · report not mounted'}</span><span>Live quotes · Yahoo Finance chart API</span></footer>
   </main>
 }
