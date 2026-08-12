@@ -85,6 +85,7 @@ function App() {
   const investedTotal = portfolioPositions.reduce((total, position) => total + position.invested, 0)
   const portfolioPnl = currentValue === null ? null : currentValue - investedTotal
   const counts = useMemo(() => rows.reduce((result, row) => { result[row.stock.forecast] += 1; return result }, { UP: 0, FLAT: 0, DOWN: 0 }), [rows])
+  const clearWatchlistChart = useCallback(() => setExpandedChart((current) => current?.area === 'watchlist' ? null : current), [])
 
   if (loading && !data) return <main className="app-shell centered"><div className="loading-state"><span className="spinner" />Loading forecast universe…</div></main>
   if (error && !data) return <main className="app-shell centered"><div className="error-panel"><span className="error-icon">!</span><h1>Data source unavailable</h1><p>{error}</p><button className="button" onClick={() => void loadDashboard()} type="button">Try again</button></div></main>
@@ -95,7 +96,6 @@ function App() {
     setSelectedSymbol(symbol)
     setExpandedChart((current) => current?.symbol === symbol && current.area === area ? null : { symbol, area })
   }
-  const clearWatchlistChart = useCallback(() => setExpandedChart((current) => current?.area === 'watchlist' ? null : current), [])
 
   return <main className="app-shell">
     <header className="topbar"><div className="brand"><div className="brand-mark"><span>↗</span></div><div><div className="eyebrow">HERMES / {tr(language, 'market')}</div><h1>Stock analytics</h1></div></div><div className="topbar-right"><label className="language-picker"><span>{tr(language, 'lang')}</span><select aria-label={tr(language, 'lang')} value={language} onChange={(event) => setLanguage(event.target.value as Language)}>{(['EN', 'ID', 'MY', 'CN'] as Language[]).map((item) => <option key={item} value={item}>{item}</option>)}</select></label><div className="read-only"><span className="live-dot" />{tr(language, 'readOnly')}</div><button className="refresh-button" onClick={() => void refreshQuotes()} disabled={quoteState === 'loading'} type="button"><span className={quoteState === 'loading' ? 'spinner small' : ''}>{quoteState === 'loading' ? '' : '↻'}</span>{quoteState === 'loading' ? tr(language, 'refreshing') : tr(language, 'refresh')}</button></div></header>
