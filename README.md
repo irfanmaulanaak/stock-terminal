@@ -37,7 +37,7 @@ The second volume is optional; omit it when the verification report has not been
 
 ## API
 
-- `GET /api/health` — local service check.
+- `GET /api/health` — backward-compatible service liveness (`ok` and `service`) plus structured forecast source, latest-snapshot age, verification age/evaluation status, universe/quote quality, runtime research-upstream state, stable warning/error codes, and generation time. Missing files and upstreams remain explicitly unavailable or not checked.
 - `GET /api/dashboard` — forecast data plus normalized optional verification metrics.
 - `GET /api/audit` — sanitized, read-only checkpoint/as-of/horizon, declared artifact versions, confidence/probability/modifier, snapshot freshness, and verification metrics. It never returns raw archives, filesystem paths, credentials, embedded research narratives, or research URLs. Missing inputs use explicit `unavailable`/`pending` states.
 - `GET /api/methodology` — implementation and active-artifact version status, checkpoint horizons, metric definitions, chronological data-separation policy, stale-data caveat, disclaimer, and available health/coverage. Implementation versions do not claim that the active forecast used that model or calibrator; undeclared active versions remain unavailable.
@@ -102,6 +102,26 @@ train only, calibrate on validation only, and reserve test rows exclusively for 
 Phase 13 adds the sanitized transparency endpoints and localized EN/ID/MY/CN forecast-audit, verification,
 and methodology panels. Metrics render only when present in the mounted verification source; a report with
 no valid denominator remains pending. Run its deterministic API contract test with `npm run test:phase13`.
+
+Phase 14 adds standard-library-only operational health checks in `research/operations.py`. They check the
+required `open`, `break`, and `close` checkpoint slots, Phase 0 schema and SHA-256 manifest integrity when
+an archive is supplied, forecast and verification age, evaluation readiness, declared/observed universe
+counts, saved quote staleness, and explicitly supplied research-source availability. Every degraded state
+uses a stable warning/error code; an absent file or an unchecked upstream is never reported as currently
+available. The CLI is read-only and emits JSON:
+
+```sh
+python3 research/operations_report.py \
+  --forecast /opt/data/watchlist_forecast_latest.json \
+  --verification /opt/data/watchlist_verification_latest.json \
+  --archive-dir /path/to/checkpoints --manifest /path/to/checkpoints/manifest.json
+npm run test:phase14
+```
+
+The server uses `FORECAST_MAX_AGE_SECONDS` (18 hours), `VERIFICATION_MAX_AGE_SECONDS` (48 hours), and
+`QUOTE_MAX_AGE_SECONDS` (15 minutes) as overridable health thresholds. Runtime Google News and Yahoo
+research calls retain the five-minute in-memory cache and now expose per-source timeout, attempt/retry,
+and sanitized error metadata. Fetches remain memory-only and never create archive or cache files.
 
 Validate a checkpoint and optionally its manifest with:
 

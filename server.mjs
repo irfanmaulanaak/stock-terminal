@@ -34,6 +34,9 @@ const chartRanges = new Set(['1d', '5d', '1mo', '3mo', '1y'])
 const chartIntervals = new Set(['5m', '15m', '1h', '1d'])
 const maxQuoteSymbols = 100
 const researchCacheMs = 5 * 60 * 1000
+const researchUpstreamState = new Map()
+const researchTimeoutMs = 7000
+const researchMaxAttempts = 2
 
 function sendJson(res, status, payload) {
   res.writeHead(status, {
@@ -155,6 +158,84 @@ async function readVerification() {
     }
   }
   return null
+}
+
+function isoAgeSeconds(value, now = Date.now()) {
+  if (typeof value !== 'string') return null
+  const timestamp = Date.parse(value)
+  return Number.isFinite(timestamp) ? Math.max(0, (now - timestamp) / 1000) : null
+}
+
+async function fileAgeSeconds(path, now = Date.now()) {
+  try { return Math.max(0, (now - (await fs.stat(path)).mtimeMs) / 1000) } catch { return null }
+}
+
+function healthIssue(level, code, message) { return { level, code, message } }
+
+async function loadHealth() {
+  const generatedAt = new Date().toISOString()
+  const now = Date.parse(generatedAt)
+  const forecastMaxAgeSeconds = Number(process.env.FORECAST_MAX_AGE_SECONDS || 64800)
+  const verificationMaxAgeSeconds = Number(process.env.VERIFICATION_MAX_AGE_SECONDS || 172800)
+  const staleAfterSeconds = Number(process.env.QUOTE_MAX_AGE_SECONDS || 900)
+  const warnings = []
+  let forecast = null
+  let forecastState = 'available'
+  try { forecast = await readForecast() } catch (error) {
+    forecastState = error instanceof SyntaxError ? 'invalid' : 'unavailable'
+    warnings.push(healthIssue('error', error instanceof SyntaxError ? 'FORECAST_INVALID_JSON' : 'FORECAST_MISSING', 'Forecast snapshot is not available as valid JSON.'))
+  }
+  const asOf = stringValue(forecast?.as_of)
+  const ageSeconds = isoAgeSeconds(asOf, now)
+  let snapshotStatus = forecast ? 'available' : 'unavailable'
+  if (forecast && ageSeconds === null) {
+    snapshotStatus = 'invalid'
+    warnings.push(healthIssue('error', 'FORECAST_TIMESTAMP_INVALID', 'Forecast as_of is missing or invalid.'))
+  } else if (ageSeconds !== null && ageSeconds > forecastMaxAgeSeconds) {
+    snapshotStatus = 'stale'
+    warnings.push(healthIssue('warning', 'FORECAST_STALE', 'Forecast snapshot exceeds the configured maximum age.'))
+  }
+  const stocks = Array.isArray(forecast?.stocks) ? forecast.stocks : []
+  const declaredUniverseCount = Number.isInteger(forecast?.universe_count) ? forecast.universe_count : null
+  const universeCountConsistent = forecast ? declaredUniverseCount === stocks.length : false
+  if (forecast && !universeCountConsistent) warnings.push(healthIssue('error', 'UNIVERSE_COUNT_MISMATCH', 'Declared universe_count does not match the stocks array.'))
+  const quoteAges = stocks.map((stock) => finiteNumber(stock?.quote_freshness_seconds)).filter((value) => value !== null && value >= 0)
+  const staleQuoteCount = quoteAges.filter((value) => value > staleAfterSeconds).length
+  const missingQuoteAgeCount = stocks.length - quoteAges.length
+  if (staleQuoteCount) warnings.push(healthIssue('warning', 'STALE_QUOTES', 'One or more saved quote observations are stale.'))
+  if (missingQuoteAgeCount) warnings.push(healthIssue('warning', 'QUOTE_AGE_MISSING', 'One or more symbols lack quote freshness metadata.'))
+
+  let verification = null
+  let verificationSource = null
+  let verificationTimestamp = null
+  for (const path of verificationPaths) {
+    try {
+      const raw = await fs.readFile(path, 'utf8')
+      verification = parseVerification(raw, path)
+      if (extname(path).toLowerCase() === '.json') {
+        const document = JSON.parse(raw)
+        verificationTimestamp = stringValue(document?.generated_at) || stringValue(document?.generatedAt) || stringValue(document?.as_of)
+      }
+      verificationSource = path
+      break
+    } catch { /* optional */ }
+  }
+  let verificationAgeSeconds = isoAgeSeconds(verificationTimestamp, now)
+  if (verificationAgeSeconds === null && verificationSource) verificationAgeSeconds = await fileAgeSeconds(verificationSource, now)
+  if (!verification) warnings.push(healthIssue('warning', 'VERIFICATION_MISSING', 'Verification report is not available.'))
+  else if (verification.status === 'pending') warnings.push(healthIssue('warning', 'VERIFICATION_PENDING', 'Verification has no evaluated outcomes.'))
+  if (verificationAgeSeconds !== null && verificationAgeSeconds > verificationMaxAgeSeconds) warnings.push(healthIssue('warning', 'VERIFICATION_STALE', 'Verification report exceeds the configured maximum age.'))
+
+  const upstreamSources = ['Google News RSS', 'Yahoo Finance chart'].map((name) => researchUpstreamState.get(name) || { name, status: 'unknown', checkedAt: null, error: null })
+  return {
+    ok: true, service: 'stock-analytics-dashboard',
+    forecastSource: { status: forecastState, configured: true },
+    latestSnapshot: { status: snapshotStatus, asOf, ageSeconds, maxAgeSeconds: forecastMaxAgeSeconds, slot: stringValue(forecast?.snapshot_slot) },
+    verification: { status: verification?.status || 'unavailable', ageSeconds: verificationAgeSeconds, maxAgeSeconds: verificationMaxAgeSeconds, evaluated: verification?.metrics?.evaluated ?? null },
+    dataQuality: { universeCount: stocks.length, declaredUniverseCount, universeCountConsistent, quoteAgeObservedCount: quoteAges.length, staleQuoteCount, missingQuoteAgeCount, staleAfterSeconds },
+    researchUpstream: { status: upstreamSources.every((source) => source.status === 'available') ? 'available' : upstreamSources.some((source) => source.status === 'unavailable') ? 'degraded' : 'not_checked', sources: upstreamSources },
+    warnings, generatedAt,
+  }
 }
 
 async function loadDashboard() {
@@ -395,24 +476,55 @@ function xmlText(block, tag) {
   return match ? decodeXml(match[1]).replace(/<[^>]+>/g, '').trim() : ''
 }
 
+function upstreamError(error) {
+  if (error?.name === 'AbortError') return { code: 'UPSTREAM_TIMEOUT', message: 'Request timed out.', retriable: true }
+  if (error instanceof SyntaxError) return { code: 'UPSTREAM_INVALID_RESPONSE', message: 'Response could not be parsed.', retriable: false }
+  const match = error instanceof Error ? error.message.match(/^HTTP (\d+)$/) : null
+  if (match) {
+    const status = Number(match[1])
+    return { code: 'UPSTREAM_HTTP_ERROR', message: `Upstream returned HTTP ${status}.`, httpStatus: status, retriable: status === 429 || status >= 500 }
+  }
+  return { code: 'UPSTREAM_REQUEST_FAILED', message: 'Upstream request failed.', retriable: true }
+}
+
+async function fetchWithRetry(endpoint, source) {
+  let failure
+  for (let attempt = 1; attempt <= researchMaxAttempts; attempt += 1) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), researchTimeoutMs)
+    try {
+      const response = await fetch(endpoint, { headers: { 'User-Agent': 'stock-analytics-dashboard/1.0' }, signal: controller.signal })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      researchUpstreamState.set(source, { name: source, status: 'available', checkedAt: new Date().toISOString(), error: null })
+      return { response, attempts: attempt }
+    } catch (error) {
+      failure = upstreamError(error)
+      if (!failure.retriable || attempt === researchMaxAttempts) break
+    } finally { clearTimeout(timeout) }
+  }
+  researchUpstreamState.set(source, { name: source, status: 'unavailable', checkedAt: new Date().toISOString(), error: failure })
+  const error = new Error(failure.message)
+  error.metadata = failure
+  error.attempts = failure.retriable ? researchMaxAttempts : 1
+  throw error
+}
+
 async function fetchRss(label, query) {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 7000)
   try {
     const endpoint = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-ID&gl=ID&ceid=ID:en`
-    const response = await fetch(endpoint, { headers: { 'User-Agent': 'stock-analytics-dashboard/1.0' }, signal: controller.signal })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const { response, attempts } = await fetchWithRetry(endpoint, 'Google News RSS')
     const xml = await response.text()
     const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)].slice(0, 8).map((match) => {
       const block = match[1]
       const publishedAt = xmlText(block, 'pubDate')
       return { title: xmlText(block, 'title'), url: xmlText(block, 'link'), source: xmlText(block, 'source') || 'Google News', publishedAt: publishedAt && !Number.isNaN(Date.parse(publishedAt)) ? new Date(publishedAt).toISOString() : null }
     }).filter((item) => item.title && /^https:\/\//.test(item.url))
-    return { label, status: 'available', source: 'Google News RSS', fetchedAt: new Date().toISOString(), items }
+    return { label, status: 'available', source: 'Google News RSS', fetchedAt: new Date().toISOString(), items, request: { timeoutMs: researchTimeoutMs, attempts, retryCount: attempts - 1 } }
   } catch (error) {
-    return { label, status: 'unavailable', source: 'Google News RSS', fetchedAt: new Date().toISOString(), items: [], message: `Upstream news unavailable: ${error instanceof Error ? error.message : 'request failed'}` }
-  } finally {
-    clearTimeout(timeout)
+    const metadata = error?.metadata || upstreamError(error)
+    researchUpstreamState.set('Google News RSS', { name: 'Google News RSS', status: 'unavailable', checkedAt: new Date().toISOString(), error: metadata })
+    const attempts = error?.attempts || 1
+    return { label, status: 'unavailable', source: 'Google News RSS', fetchedAt: new Date().toISOString(), items: [], message: 'Upstream news is unavailable.', request: { timeoutMs: researchTimeoutMs, attempts, retryCount: attempts - 1, error: metadata } }
   }
 }
 
@@ -431,20 +543,19 @@ function sentimentLayer(name, items, unavailableMessage, fetchedAt) {
 
 async function fetchMarketContext(symbol, yahooSymbol, name) {
   try {
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 7000)
-    const response = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?range=5d&interval=1d`, { headers: { 'User-Agent': 'stock-analytics-dashboard/1.0' }, signal: controller.signal })
-    clearTimeout(timeout)
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const { response, attempts } = await fetchWithRetry(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?range=5d&interval=1d`, 'Yahoo Finance chart')
     const body = await response.json()
     const bars = normalizeChartBars(body?.chart?.result?.[0])
     const first = bars[0]?.close
     const last = bars.at(-1)?.close
     const changePct = first && last ? ((last - first) / first) * 100 : null
     const tone = changePct === null ? 'neutral' : changePct > 0.5 ? 'positive' : changePct < -0.5 ? 'negative' : 'neutral'
-    return { name, tone, regime: changePct === null ? 'insufficient data' : `${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}% / 5d`, impact: `${symbol} may be influenced by this market backdrop.`, confidence: changePct === null ? 'low' : 'medium', observations: bars.length, source: `Yahoo Finance chart (${yahooSymbol})`, fetchedAt: new Date().toISOString() }
-  } catch {
-    return { name, tone: 'unavailable', regime: 'insufficient data', impact: 'Yahoo market context is temporarily unavailable.', confidence: 'low', observations: 0, source: `Yahoo Finance chart (${yahooSymbol})`, fetchedAt: new Date().toISOString() }
+    return { name, tone, regime: changePct === null ? 'insufficient data' : `${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}% / 5d`, impact: `${symbol} may be influenced by this market backdrop.`, confidence: changePct === null ? 'low' : 'medium', observations: bars.length, source: `Yahoo Finance chart (${yahooSymbol})`, fetchedAt: new Date().toISOString(), request: { timeoutMs: researchTimeoutMs, attempts, retryCount: attempts - 1 } }
+  } catch (error) {
+    const metadata = error?.metadata || upstreamError(error)
+    researchUpstreamState.set('Yahoo Finance chart', { name: 'Yahoo Finance chart', status: 'unavailable', checkedAt: new Date().toISOString(), error: metadata })
+    const attempts = error?.attempts || 1
+    return { name, tone: 'unavailable', regime: 'insufficient data', impact: 'Yahoo market context is temporarily unavailable.', confidence: 'low', observations: 0, source: `Yahoo Finance chart (${yahooSymbol})`, fetchedAt: new Date().toISOString(), request: { timeoutMs: researchTimeoutMs, attempts, retryCount: attempts - 1, error: metadata } }
   }
 }
 
@@ -460,7 +571,7 @@ async function loadResearch(symbol) {
     fetchMarketContext(symbol, '^GSPC', 'Global'),
   ])
   const sectorItems = company.items
-  const sources = [company, indonesia, global].map(({ label, status, source, fetchedAt: sourceFetchedAt, message, items }) => ({ label, status, source, fetchedAt: sourceFetchedAt, itemCount: items.length, ...(message ? { message } : {}) }))
+  const sources = [company, indonesia, global].map(({ label, status, source, fetchedAt: sourceFetchedAt, message, items, request }) => ({ label, status, source, fetchedAt: sourceFetchedAt, itemCount: items.length, request, ...(message ? { message } : {}) }))
   const payload = {
     symbol, yahooSymbol: `${symbol}.JK`, fetchedAt, cacheTtlSeconds: researchCacheMs / 1000,
     freshness: 'Runtime fetch; news queries cover the last 7–14 days.',
@@ -526,7 +637,7 @@ const server = createServer(async (req, res) => {
   }
   try {
     if (url.pathname === '/api/health') {
-      sendJson(res, 200, { ok: true, service: 'stock-analytics-dashboard' })
+      sendJson(res, 200, await loadHealth())
       return
     }
     if (url.pathname === '/api/audit') {
