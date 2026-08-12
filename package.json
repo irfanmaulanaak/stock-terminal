@@ -9,6 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "test:phase13": "node --test test/phase13.test.mjs",
     "test:phase14": "node --test test/phase14.test.mjs",
+    "test": "python3 -m unittest discover -s research/tests -v && npm run build && node --check server.mjs && npm run test:phase13 && npm run test:phase14",
     "preview": "vite preview --host 0.0.0.0 --port 4173",
     "start": "node server.mjs"
   },
