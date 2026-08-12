@@ -165,3 +165,22 @@ timezone-aware ISO-8601 timestamp:
 python3 research/walk_forward_report.py /path/to/walk-forward-config.json
 python3 research/walk_forward_report.py - --output /path/to/walk-forward-report.json
 ```
+
+## Phase 10 ablation experiments
+
+`research.ablation` runs an ordered set of reproducible experiments over the same Phase 9 chronological
+folds and selected validation/test splits. Each experiment names explicit feature groups and one built-in
+predictor. For `feature_sign`, all named features form the derived vector: each finite feature is signed
+after its optional dead-band and the mean sign determines `UP`, `FLAT`, or `DOWN`. If even one selected
+feature is missing or non-finite, that row is left unpredicted rather than zero-filled.
+
+The report includes the always-FLAT reference, an explicit baseline (default `previous_direction`), metrics,
+coverage, grouped metrics, fold stability, deltas from the baseline, and deterministic feature-group
+contribution summaries. A winner is emitted only when its selected out-of-sample metric strictly exceeds
+the baseline. Input is `{rows, experiments, folds}` with optional `baseline_predictor`, `metric`, and
+`splits`:
+
+```sh
+python3 research/ablation_report.py /path/to/ablation-config.json
+python3 research/ablation_report.py - --output /path/to/ablation-report.json
+```

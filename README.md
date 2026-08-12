@@ -77,6 +77,12 @@ target MAE, confusion matrices, and available horizon/regime/sector/liquidity/co
 JSON-configured built-in baselines with `research/walk_forward_report.py`; custom Python integrations can
 provide deterministic predictor callbacks with a separate JSON-friendly descriptor.
 
+Phase 10 adds reproducible feature ablations in `research/ablation.py`. Ordered experiments reuse identical
+Phase 9 folds, compare with always-FLAT and an explicit/current baseline, and report coverage, grouped and
+per-fold stability metrics, incremental baseline deltas, and deterministic feature-group summaries. The
+`feature_sign` experiment abstains when any selected feature is missing; it never zero-fills. Run JSON
+configs with `research/ablation_report.py`; a winner is named only for strict out-of-sample improvement.
+
 Validate a checkpoint and optionally its manifest with:
 
 ```sh
