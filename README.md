@@ -57,6 +57,8 @@ The calendar helper intentionally does not embed an IDX holiday calendar: caller
 
 Phase 4 adds standard-library-only relative-strength research: benchmark-relative returns, market and sector breadth, explicit sector and peer comparisons, and directional volume breadth. Its CLI, `research/relative_strength_report.py`, consumes two explicitly timestamp-aligned checkpoints. Unknown sectors and missing benchmarks produce `null` values and duplicate symbols are rejected; the module never infers classifications or selects later observations.
 
+Phase 5 adds a standard-library-only Indonesia regime report covering multi-horizon IHSG trend and volatility, breadth, foreign flow and acceleration, USD/IDR, BI-rate changes, macro-event freshness, and a transparent risk-on/neutral/risk-off score. Its CLI, `research/indonesia_regime_report.py`, requires a timezone-aware checkpoint and timestamp on every observation. Future inputs are excluded, while missing or invalid inputs remain `null` with availability metadata.
+
 Validate a checkpoint and optionally its manifest with:
 
 ```sh

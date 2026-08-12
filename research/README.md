@@ -72,3 +72,16 @@ The report builder requires explicit `start` and `end` checkpoints, each contain
 python3 research/relative_strength_report.py /path/to/checkpoints.json
 python3 research/relative_strength_report.py - --output /path/to/relative-strength.json
 ```
+
+## Phase 5 Indonesia regime
+
+`research.indonesia_regime` builds a deterministic, point-in-time Indonesia risk-regime report. It calculates IHSG returns over multiple horizons and population volatility over complete return windows, the latest market breadth, foreign net flow and its one-observation acceleration, multi-horizon USD/IDR changes, BI-rate change in percentage points and basis points, and macro-event age/freshness. Returns and FX changes are decimals. A horizon of `n` uses the latest value and the value `n` observations earlier; therefore it requires `n + 1` eligible values.
+
+The input root requires a timezone-aware `as_of`. Every IHSG, breadth, foreign-flow, USD/IDR, and BI-rate row requires a timezone-aware `observed_at`; every macro event requires `released_at`. Rows later than `as_of` are counted in `excluded_future_count` and never used. Untimestamped, timezone-naive, malformed, and missing inputs remain `null` and are described by availability metadata rather than imputed.
+
+The transparent regime classifier signs six components: long-horizon IHSG trend, breadth, foreign flow, flow acceleration, rupiah direction (a falling USD/IDR rate is positive), and BI-rate direction (unchanged or lower is positive). At least three signals are required. A score of at least `+2` is `risk_on`, at most `-2` is `risk_off`, and otherwise it is `neutral`; without minimum coverage the regime is `null`. Macro events report context and freshness but do not implicitly encode whether an event is favorable.
+
+```sh
+python3 research/indonesia_regime_report.py /path/to/regime-input.json
+python3 research/indonesia_regime_report.py - --output /path/to/regime-report.json
+```
