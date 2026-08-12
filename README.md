@@ -48,3 +48,17 @@ Research coverage is best-effort and depends on unauthenticated public endpoints
 Official checkpoint forecast archives are designed to preserve the sentiment inputs used at forecast time. Each stock can carry immutable `sentiment_context` for `company`, `sector`, `indonesia_market`, and `global`, plus `sentiment_conflict`, `forecast_modifier`, and `sentiment_summary`; the archive-level `market_context` records the global and Indonesia-market summaries. These curated archives remain local under `/opt/data` and must never be committed or pushed. Positive company news does not automatically override an adverse Indonesia or global market regime.
 
 Each snapshot is a one-checkpoint-ahead forecast: close 16:01 → next trading-day open 09:01, open 09:01 → break 12:01, and break 12:01 → close 16:01. The verifier compares the forecast baseline to the next checkpoint baseline, reports 3-way/directional accuracy, UP precision/recall, target MAE, confusion matrices, and whether re-analysis improved the next transition.
+
+## Local research core
+
+`research/` is a Python standard-library-only contract package for immutable IDX checkpoint archives. It defines the `open`, `break`, and `close` slots and their one-checkpoint horizons, weekday/explicit-holiday calendar helpers, snapshot schema validation, atomic deterministic JSON writes, and SHA-256 archive manifests. The contract requires provenance and immutable archive metadata, archive-level Indonesia/global context, and preserved sentiment plus data-quality observations for every stock. Unknown fields remain allowed for forward-compatible producers.
+
+The calendar helper intentionally does not embed an IDX holiday calendar: callers must pass their authoritative holiday dates. Generated data belongs outside the repository (normally under `/opt/data`); local `research/data`, `research/archives`, `research/output`, and `research/cache` paths are also ignored.
+
+Validate a checkpoint and optionally its manifest with:
+
+```sh
+python3 research/validate_snapshot.py /path/to/checkpoint.json
+python3 research/validate_snapshot.py /path/to/checkpoint.json --manifest /path/to/manifest.json
+python3 -m unittest research.tests.test_phase0
+```

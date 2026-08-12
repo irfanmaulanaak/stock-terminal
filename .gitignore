@@ -21,3 +21,11 @@ news-cache/
 news_snapshots/
 watchlist_snapshots/
 watchlist_verification/
+
+# Local research core outputs (source and tests under research/ remain tracked)
+research/data/
+research/archives/
+research/output/
+research/cache/
+research/**/__pycache__/
+research/**/*.py[cod]
