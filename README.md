@@ -70,6 +70,13 @@ audited inputs. Optional three-way probabilities are validated in `[0, 1]`. The 
 `research/abstention_report.py`, and the snapshot contract permits `forecast: ABSTAIN` while keeping all
 new probability fields optional for older archives.
 
+Phase 9 adds chronological rolling and expanding evaluation in `research/walk_forward.py`. It enforces
+timezone-aware rows, configurable duplicate rejection, horizon-aware purging, and test embargoes without
+randomization. Reports include fold metadata, prediction coverage, three-way and class-balanced metrics,
+target MAE, confusion matrices, and available horizon/regime/sector/liquidity/confidence groups. Run the
+JSON-configured built-in baselines with `research/walk_forward_report.py`; custom Python integrations can
+provide deterministic predictor callbacks with a separate JSON-friendly descriptor.
+
 Validate a checkpoint and optionally its manifest with:
 
 ```sh

@@ -144,3 +144,24 @@ fields mandatory for legacy archives.
 python3 research/abstention_report.py /path/to/policy-input.json
 python3 research/abstention_report.py - --output /path/to/abstention-report.json
 ```
+
+## Phase 9 walk-forward evaluation
+
+`research.walk_forward` validates timezone-aware observation times, sorts rows chronologically, and never
+shuffles them. It creates expanding or fixed-duration rolling folds with half-open validation and test
+intervals, optional purge gaps, test embargoes, and horizon-overlap purging. Duplicate row IDs are rejected
+by default; duplicate timestamps can be rejected explicitly.
+
+Reports include fold boundaries and counts, prediction coverage, three-way accuracy, balanced accuracy,
+macro-F1, confusion matrices, target MAE when numeric targets are predicted, and grouped metrics for any
+available horizon, regime, sector, liquidity, or confidence fields. Built-ins are `always_flat`,
+`previous_direction`, `majority_train`, and `feature_sign`; the latter requires a named feature. Python
+callers may instead provide a deterministic callback plus a JSON-friendly predictor description.
+
+The CLI input is `{rows, predictor, folds}`. Durations are expressed in seconds and `folds.train_end` is a
+timezone-aware ISO-8601 timestamp:
+
+```sh
+python3 research/walk_forward_report.py /path/to/walk-forward-config.json
+python3 research/walk_forward_report.py - --output /path/to/walk-forward-report.json
+```
