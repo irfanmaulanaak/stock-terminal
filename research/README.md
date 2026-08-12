@@ -61,3 +61,14 @@ The CLI accepts either `{quote, bars}` or `{observations: [{symbol, quote, bars}
 python3 research/features_report.py /path/to/observations.json
 python3 research/features_report.py - --output /path/to/features.json
 ```
+
+## Phase 4 relative strength
+
+`research.relative_strength` provides dependency-free benchmark-relative returns, cross-sectional breadth, explicit sector mapping, equal-weighted sector returns, sector breadth, peer-relative returns, and directional volume breadth. Returns and breadth scores are decimals. Peer-relative return compares a symbol with the mean return of its other available peers in the same explicitly mapped sector; a symbol without a known sector or another available peer receives `null`.
+
+The report builder requires explicit `start` and `end` checkpoints, each containing `as_of` and an `observations` array of `{symbol, price, volume, observed_at}` objects. An observation participates only when `observed_at` exactly equals its checkpoint's `as_of`; nearby and future observations are not substituted. Duplicate symbols are rejected. Missing benchmark data makes every benchmark-relative result `null`, and unknown sector mappings remain `null` rather than being inferred.
+
+```sh
+python3 research/relative_strength_report.py /path/to/checkpoints.json
+python3 research/relative_strength_report.py - --output /path/to/relative-strength.json
+```

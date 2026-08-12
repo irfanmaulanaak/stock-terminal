@@ -55,6 +55,8 @@ Each snapshot is a one-checkpoint-ahead forecast: close 16:01 → next trading-d
 
 The calendar helper intentionally does not embed an IDX holiday calendar: callers must pass their authoritative holiday dates. Generated data belongs outside the repository (normally under `/opt/data`); local `research/data`, `research/archives`, `research/output`, and `research/cache` paths are also ignored.
 
+Phase 4 adds standard-library-only relative-strength research: benchmark-relative returns, market and sector breadth, explicit sector and peer comparisons, and directional volume breadth. Its CLI, `research/relative_strength_report.py`, consumes two explicitly timestamp-aligned checkpoints. Unknown sectors and missing benchmarks produce `null` values and duplicate symbols are rejected; the module never infers classifications or selects later observations.
+
 Validate a checkpoint and optionally its manifest with:
 
 ```sh
