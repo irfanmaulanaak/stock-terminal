@@ -61,6 +61,8 @@ Phase 5 adds a standard-library-only Indonesia regime report covering multi-hori
 
 Phase 6 adds a standard-library-only global regime report for global equities, VIX, DXY, US 2-year/10-year yields, and seven explicitly named commodities. It calculates timestamp-gated multi-horizon changes and volatility and applies only explicit symbol or sector USD/risk/commodity exposures. Its CLI is `research/global_regime_report.py`; future observations are excluded and unknown sources, mappings, and sensitivities remain `null`.
 
+Phase 7 adds a standard-library-only, offline sentiment pipeline in `research/sentiment.py`. It canonicalizes and deduplicates timestamped articles, excludes future publications relative to an explicit `as_of`, applies transparent source/event/tone/impact/novelty rules, and reports independently supplied company, sector, Indonesia-market, and global layers. Empty layers are explicitly unavailable. The CLI is `research/sentiment_report.py`; sector aggregation consumes only sector and peer article arrays.
+
 Validate a checkpoint and optionally its manifest with:
 
 ```sh

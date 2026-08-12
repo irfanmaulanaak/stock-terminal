@@ -105,3 +105,21 @@ missing market signal.
 python3 research/global_regime_report.py /path/to/global-input.json
 python3 research/global_regime_report.py - --output /path/to/global-report.json
 ```
+
+## Phase 7 research sentiment
+
+`research.sentiment` produces deterministic, point-in-time article context without network access or
+third-party packages. It canonicalizes HTTP(S) URLs by removing fragments and common tracking parameters,
+normalizes titles, and deduplicates first by canonical URL and then by normalized title plus publisher.
+Both `published_at` and `fetched_at` must be timezone-aware; articles published after the explicit root
+`as_of` are excluded.
+
+Each eligible article receives a transparent source tier, event type, tone, impact, and age-based novelty.
+Issuer domains are supplied explicitly. The report keeps company, sector, Indonesia-market, and global
+layers independent: sector context uses only `sector_articles` and `peer_articles`, never
+`company_articles`. A layer with no eligible articles is returned as explicitly unavailable.
+
+```sh
+python3 research/sentiment_report.py /path/to/article-input.json
+python3 research/sentiment_report.py - --output /path/to/sentiment-report.json
+```
