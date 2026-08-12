@@ -37,3 +37,14 @@ python3 research/evaluate_snapshots.py \
 ```
 
 With no output path, deterministic JSON is written to stdout; pass `--format markdown` for Markdown. Reports include accuracy, balanced accuracy, macro-F1, per-class precision/recall, UP precision/recall, target MAE in percentage points, confusion matrix, coverage, observation details, always-FLAT metrics, and market-direction metrics when available. No wall-clock timestamp is embedded, and ordering follows the explicit pair order with symbols sorted inside each pair.
+
+## Phase 2 data quality
+
+`research.data_quality` normalizes quote and OHLCV observations, measures quote age and bar delay, and reports liquidity and market-event warnings with a deterministic `ok`, `partial`, or `unavailable` status. Callers provide `as_of`; the module never reads the wall clock. Input timestamps may be timezone-aware ISO-8601 strings or Unix seconds/milliseconds.
+
+The CLI accepts either one `{as_of, quote, bars}` object or `{as_of, observations: [{symbol, quote, bars}]}` and writes sorted JSON:
+
+```sh
+python3 research/quality_report.py /path/to/observations.json
+python3 research/quality_report.py - --output /path/to/report.json
+```

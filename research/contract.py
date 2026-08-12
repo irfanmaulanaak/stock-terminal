@@ -8,6 +8,7 @@ calendar from being mistaken for an exchange calendar.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+import math
 from typing import Any, Iterable, Mapping
 
 SCHEMA_VERSION = "1.0"
@@ -29,6 +30,9 @@ HORIZONS = {
 }
 SENTIMENT_LAYERS = ("company", "sector", "indonesia_market", "global")
 DATA_QUALITY_STATUSES = ("ok", "partial", "unavailable")
+DATA_QUALITY_FLAGS = ("stale", "missing", "partial", "invalid", "thin_liquidity",
+                      "corporate_action_warning", "limit_move_warning", "suspension_warning")
+DATA_QUALITY_METRICS = ("age_seconds", "delay_seconds", "turnover", "volume_ratio", "range_percent")
 FORECAST_MODIFIERS = ("supportive", "neutral", "mixed", "reduced_conviction", "market_headwind", "insufficient_data")
 
 
@@ -169,7 +173,18 @@ def validate_snapshot(snapshot: Any) -> None:
                 errors.append(f"{prefix}.data_quality.status must be one of {DATA_QUALITY_STATUSES}")
             if not isinstance(quality.get("issues"), list) or not all(_nonempty_string(v) for v in quality.get("issues", [])):
                 errors.append(f"{prefix}.data_quality.issues must be an array of non-empty strings")
-            if not _timestamp(quality.get("observed_at")):
+            if quality.get("observed_at") is None and quality.get("status") == "unavailable":
+                pass
+            elif not _timestamp(quality.get("observed_at")):
                 errors.append(f"{prefix}.data_quality.observed_at must be an ISO-8601 timestamp with timezone")
+            for key in DATA_QUALITY_FLAGS:
+                if key in quality and not isinstance(quality[key], bool):
+                    errors.append(f"{prefix}.data_quality.{key} must be a boolean")
+            if "valid_bar_count" in quality and (isinstance(quality["valid_bar_count"], bool) or not isinstance(quality["valid_bar_count"], int) or quality["valid_bar_count"] < 0):
+                errors.append(f"{prefix}.data_quality.valid_bar_count must be a non-negative integer")
+            for key in DATA_QUALITY_METRICS:
+                value = quality.get(key)
+                if key in quality and value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0):
+                    errors.append(f"{prefix}.data_quality.{key} must be null or a non-negative finite number")
     if errors:
         raise ValidationError(errors)
