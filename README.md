@@ -83,6 +83,13 @@ per-fold stability metrics, incremental baseline deltas, and deterministic featu
 `feature_sign` experiment abstains when any selected feature is missing; it never zero-fills. Run JSON
 configs with `research/ablation_report.py`; a winner is named only for strict out-of-sample improvement.
 
+Phase 11 adds deterministic transparent models in `research/models.py`: always-FLAT, training-majority,
+multi-feature sign, softmax multinomial logistic regression, and ridge regression for numeric target return.
+Learned models use training-only standardization and expose their complete fitted parameters; incomplete or
+non-numeric feature vectors are unavailable, never zero-filled. `research/model_report.py` compares model
+specifications over Phase 9 folds, fitting once per fold on training rows and scoring only the requested
+validation/test rows.
+
 Validate a checkpoint and optionally its manifest with:
 
 ```sh

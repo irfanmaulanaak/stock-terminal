@@ -184,3 +184,27 @@ the baseline. Input is `{rows, experiments, folds}` with optional `baseline_pred
 python3 research/ablation_report.py /path/to/ablation-config.json
 python3 research/ablation_report.py - --output /path/to/ablation-report.json
 ```
+
+## Phase 11 transparent models
+
+`research.models` adds a deterministic progression from `always_flat`, `majority_train`, and multi-feature
+`feature_sign` to softmax multinomial logistic regression and ridge linear regression for the numeric
+`target_return`. Learned models standardize each explicitly selected feature using only complete training
+rows; the fitted means and population scales are reused at prediction time. L2 regularization never applies
+to intercepts. Logistic regression uses fixed-iteration batch gradient descent with no random initialization,
+and ridge uses deterministic normal equations.
+
+Every fitted model exposes its version, ordered feature names, means/scales, coefficients, intercepts,
+regularization, iteration count, and training-row coverage. Predictions consistently expose availability,
+class probabilities, raw scores, direction, and numeric target. A missing, boolean, non-numeric, or non-finite
+selected feature makes that prediction unavailable rather than substituting zero. Sorted-key JSON model
+serialization is deterministic and round-trippable.
+
+`compare_models` fits each requested model once per Phase 9 fold using that fold's chronological training rows,
+then evaluates only the configured validation/test splits. The CLI input is `{rows, models, folds}` with an
+optional `splits` array:
+
+```sh
+python3 research/model_report.py /path/to/model-config.json
+python3 research/model_report.py - --output /path/to/model-report.json
+```
