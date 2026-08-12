@@ -1,0 +1,23 @@
+node_modules
+dist
+.DS_Store
+npm-debug.log*
+
+# Hermes-curated market data and generated research artifacts
+*.jsonl
+*.sqlite
+*.sqlite3
+*.db
+.env
+.env.*
+
+# Keep local forecast snapshots, verification reports, and news caches out of Git
+forecast*.json
+*forecast*.json
+*snapshot*.json
+*verification*.json
+*verification*.md
+news-cache/
+news_snapshots/
+watchlist_snapshots/
+watchlist_verification/

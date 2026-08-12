@@ -1,0 +1,379 @@
+import { createServer } from 'node:http'
+import { promises as fs } from 'node:fs'
+import { extname, join, resolve, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const appDir = resolve(fileURLToPath(new URL('.', import.meta.url)))
+const distDir = join(appDir, 'dist')
+const port = Number(process.env.PORT || 4173)
+const host = process.env.HOST || '0.0.0.0'
+const forecastPath = process.env.FORECAST_FILE || '/opt/data/watchlist_forecast_latest.json'
+const verificationPaths = [
+  process.env.VERIFICATION_FILE,
+  '/opt/data/watchlist_verification_latest.md',
+  '/opt/data/watchlist_verification_latest.json',
+  '/opt/data/watchlist_verification_2026-08-12.md',
+  '/opt/data/watchlist_verification_2026-08-12.json',
+  '/opt/data/temp_watchlist_verification_2026-08-12.json',
+].filter(Boolean)
+
+const mimeTypes = {
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+}
+const quoteCache = new Map()
+const chartCache = new Map()
+const quoteSymbolPattern = /^[A-Z0-9]{1,6}(?:\.JK)?$/
+const chartRanges = new Set(['1d', '5d', '1mo', '3mo', '1y'])
+const chartIntervals = new Set(['5m', '15m', '1h', '1d'])
+const maxQuoteSymbols = 100
+
+function sendJson(res, status, payload) {
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'Access-Control-Allow-Origin': '*',
+  })
+  res.end(JSON.stringify(payload))
+}
+
+async function readForecast() {
+  const raw = await fs.readFile(forecastPath, 'utf8')
+  return JSON.parse(raw)
+}
+
+function keyName(value) {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+function flatten(value, output = {}) {
+  if (!value || typeof value !== 'object') return output
+  for (const [key, child] of Object.entries(value)) {
+    if (child !== null && typeof child === 'object') flatten(child, output)
+    else output[keyName(key)] = child
+  }
+  return output
+}
+
+function numberFrom(flat, names) {
+  for (const name of names) {
+    const value = Number(flat[keyName(name)])
+    if (Number.isFinite(value)) return value
+  }
+  return null
+}
+
+function percent(value) {
+  if (value === null || !Number.isFinite(value)) return null
+  return Math.abs(value) <= 1 ? value * 100 : value
+}
+
+function textPercent(raw, terms) {
+  const match = raw.match(new RegExp(`(?:${terms})[^\\d%]{0,48}(\\d+(?:\\.\\d+)?)\\s*%?`, 'i'))
+  return match ? percent(Number(match[1])) : null
+}
+
+function parseVerification(raw, path) {
+  const isJson = extname(path).toLowerCase() === '.json'
+  let flat = {}
+  if (isJson) {
+    try {
+      flat = flatten(JSON.parse(raw))
+    } catch {
+      flat = {}
+    }
+  }
+
+  let accuracy = numberFrom(flat, ['accuracy', 'overall_accuracy', 'overallAccuracy', 'hit_rate', 'hitRate'])
+  let directionalAccuracy = numberFrom(flat, ['directional_accuracy', 'directionalAccuracy', 'direction_accuracy'])
+  let correct = numberFrom(flat, ['correct', 'correct_predictions', 'correctPredictions', 'hits'])
+  let evaluated = numberFrom(flat, ['evaluated', 'total', 'sample_count', 'sampleCount', 'n'])
+
+  if (!isJson) {
+    accuracy ??= textPercent(raw, 'overall accuracy|accuracy|hit rate|correctness')
+    directionalAccuracy ??= textPercent(raw, 'directional accuracy|direction accuracy')
+    const count = raw.match(/(\d+)\s*(?:\/|of)\s*(\d+)/i)
+    correct ??= count ? Number(count[1]) : null
+    evaluated ??= count ? Number(count[2]) : null
+  }
+  if (accuracy === null && correct !== null && evaluated) accuracy = (correct / evaluated) * 100
+
+  return {
+    path,
+    format: isJson ? 'JSON' : 'Markdown',
+    metrics: { accuracy, directionalAccuracy, correct, evaluated },
+  }
+}
+
+async function readVerification() {
+  for (const path of verificationPaths) {
+    try {
+      const raw = await fs.readFile(path, 'utf8')
+      return parseVerification(raw, path)
+    } catch {
+      // An optional report is allowed to be absent or not yet generated.
+    }
+  }
+  return null
+}
+
+async function loadDashboard() {
+  const forecast = await readForecast()
+  return { forecast, verification: await readVerification() }
+}
+
+function normalizeQuoteSymbol(raw) {
+  const value = raw.trim().toUpperCase()
+  if (!quoteSymbolPattern.test(value)) return null
+  return value.endsWith('.JK') ? value.slice(0, -3) : value
+}
+
+async function fetchQuote(symbol) {
+  const yahooSymbol = `${symbol}.JK`
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 7000)
+  try {
+    const endpoint = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?range=5d&interval=1d&includePrePost=false`
+    const response = await fetch(endpoint, {
+      headers: { 'User-Agent': 'stock-analytics-dashboard/1.0' },
+      signal: controller.signal,
+    })
+    if (!response.ok) throw new Error(`Yahoo returned ${response.status}`)
+    const body = await response.json()
+    const chart = body?.chart?.result?.[0]
+    if (!chart) throw new Error('No chart data')
+    const meta = chart.meta || {}
+    const closes = (chart.indicators?.quote?.[0]?.close || []).filter((value) => Number.isFinite(value))
+    const price = Number(meta.regularMarketPrice ?? closes.at(-1))
+    const previousClose = Number(meta.previousClose ?? closes.at(-2))
+    if (!Number.isFinite(price)) throw new Error('No latest price')
+    const change = Number.isFinite(previousClose) ? price - previousClose : null
+    return {
+      symbol,
+      yahooSymbol,
+      price,
+      previousClose: Number.isFinite(previousClose) ? previousClose : null,
+      change,
+      changePct: change !== null && previousClose ? (change / previousClose) * 100 : null,
+      asOf: meta.regularMarketTime ? new Date(meta.regularMarketTime * 1000).toISOString() : null,
+    }
+  } catch (error) {
+    return { symbol, yahooSymbol, error: error instanceof Error ? error.message : 'Quote unavailable' }
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+function normalizeChartRequest(url) {
+  const rawSymbol = url.searchParams.get('symbol')
+  const range = url.searchParams.get('range')
+  const interval = url.searchParams.get('interval')
+  const symbol = rawSymbol ? normalizeQuoteSymbol(rawSymbol) : null
+  if (!symbol) return { error: 'symbol must be an IDX ticker such as BBCA or BBCA.JK.' }
+  if (!range || !chartRanges.has(range)) return { error: 'range must be one of 1d, 5d, 1mo, 3mo, or 1y.' }
+  if (!interval || !chartIntervals.has(interval)) return { error: 'interval must be one of 5m, 15m, 1h, or 1d.' }
+  return { symbol, range, interval }
+}
+
+function normalizeChartBars(chart) {
+  const timestamps = Array.isArray(chart?.timestamp) ? chart.timestamp : []
+  const quote = chart?.indicators?.quote?.[0] || {}
+  const bars = timestamps.map((timestamp, index) => {
+    const time = Number(timestamp)
+    const open = Number(quote.open?.[index])
+    const high = Number(quote.high?.[index])
+    const low = Number(quote.low?.[index])
+    const close = Number(quote.close?.[index])
+    const volume = Number(quote.volume?.[index])
+    if (![time, open, high, low, close].every(Number.isFinite) || time <= 0 || open <= 0 || high <= 0 || low <= 0 || close <= 0) return null
+    const normalizedHigh = Math.max(open, high, low, close)
+    const normalizedLow = Math.min(open, high, low, close)
+    return {
+      time: Math.trunc(time),
+      open,
+      high: normalizedHigh,
+      low: normalizedLow,
+      close,
+      volume: Number.isFinite(volume) ? Math.max(0, volume) : 0,
+    }
+  }).filter(Boolean)
+  return [...new Map(bars.map((bar) => [bar.time, bar])).values()].sort((left, right) => left.time - right.time)
+}
+
+async function fetchChart(symbol, range, interval) {
+  const cacheKey = `${symbol}:${range}:${interval}`
+  const cached = chartCache.get(cacheKey)
+  if (cached && Date.now() - cached.at < 30000) return cached.payload
+
+  const yahooSymbol = `${symbol}.JK`
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 10000)
+  try {
+    const endpoint = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSymbol)}?range=${encodeURIComponent(range)}&interval=${encodeURIComponent(interval)}&includePrePost=false&events=div%2Csplits`
+    const response = await fetch(endpoint, {
+      headers: { 'User-Agent': 'stock-analytics-dashboard/1.0' },
+      signal: controller.signal,
+    })
+    if (!response.ok) throw new Error(`Yahoo returned ${response.status}`)
+    const body = await response.json()
+    if (body?.chart?.error) throw new Error('Yahoo returned chart data error')
+    const chart = body?.chart?.result?.[0]
+    const bars = normalizeChartBars(chart)
+    if (!bars.length) throw new Error('No chart data available')
+    const payload = {
+      symbol,
+      yahooSymbol,
+      range,
+      interval,
+      bars,
+      meta: {
+        currency: chart?.meta?.currency || 'IDR',
+        exchangeTimezoneName: chart?.meta?.exchangeTimezoneName || 'Asia/Jakarta',
+        dataGranularity: chart?.meta?.dataGranularity || interval,
+      },
+      source: 'Yahoo Finance chart API',
+      fetchedAt: new Date().toISOString(),
+    }
+    chartCache.set(cacheKey, { at: Date.now(), payload })
+    return payload
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function limitedMap(items, limit, worker) {
+  const results = []
+  let cursor = 0
+  async function consume() {
+    while (cursor < items.length) {
+      const item = items[cursor++]
+      results.push(await worker(item))
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, consume))
+  return results
+}
+
+async function loadQuotes(symbols) {
+  const uniqueSymbols = [...new Set(symbols)]
+  const now = Date.now()
+  const staleSymbols = uniqueSymbols.filter((symbol) => {
+    const cached = quoteCache.get(symbol)
+    return !cached || now - cached.at >= 20000
+  })
+  if (staleSymbols.length) {
+    const freshQuotes = await limitedMap(staleSymbols, 8, fetchQuote)
+    const fetchedAt = Date.now()
+    freshQuotes.forEach((quote) => quoteCache.set(quote.symbol, { at: fetchedAt, quote }))
+  }
+  return uniqueSymbols.map((symbol) => quoteCache.get(symbol)?.quote).filter(Boolean)
+}
+
+async function serveStatic(res, pathname) {
+  let decoded
+  try {
+    decoded = decodeURIComponent(pathname)
+  } catch {
+    res.writeHead(400)
+    res.end('Bad request')
+    return
+  }
+  const requested = decoded === '/' ? '/index.html' : decoded
+  let filePath = resolve(distDir, `.${requested}`)
+  if (filePath !== distDir && !filePath.startsWith(`${distDir}${sep}`)) {
+    res.writeHead(403)
+    res.end('Forbidden')
+    return
+  }
+  try {
+    const file = await fs.readFile(filePath)
+    res.writeHead(200, {
+      'Content-Type': mimeTypes[extname(filePath)] || 'application/octet-stream',
+      'Cache-Control': extname(filePath) === '.html' ? 'no-cache' : 'public, max-age=31536000, immutable',
+    })
+    res.end(file)
+  } catch {
+    if (!extname(requested)) {
+      filePath = join(distDir, 'index.html')
+      try {
+        const file = await fs.readFile(filePath)
+        res.writeHead(200, { 'Content-Type': mimeTypes['.html'], 'Cache-Control': 'no-cache' })
+        res.end(file)
+        return
+      } catch {
+        // Fall through to the useful build hint below.
+      }
+    }
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
+    res.end('Dashboard build not found. Run npm run build first.')
+  }
+}
+
+const server = createServer(async (req, res) => {
+  const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`)
+  if (req.method !== 'GET') {
+    sendJson(res, 405, { error: 'Read-only API: GET requests only.' })
+    return
+  }
+  try {
+    if (url.pathname === '/api/health') {
+      sendJson(res, 200, { ok: true, service: 'stock-analytics-dashboard' })
+      return
+    }
+    if (url.pathname === '/api/dashboard') {
+      sendJson(res, 200, await loadDashboard())
+      return
+    }
+    if (url.pathname === '/api/quotes') {
+      const dashboard = await loadDashboard()
+      const rawSymbols = url.searchParams.get('symbols')
+      let symbols
+      if (rawSymbols === null) {
+        symbols = dashboard.forecast.stocks.map((stock) => stock.symbol)
+      } else {
+        const rawValues = rawSymbols.split(',')
+        if (rawValues.length > maxQuoteSymbols) {
+          sendJson(res, 400, { error: `A maximum of ${maxQuoteSymbols} symbols can be requested.` })
+          return
+        }
+        const invalidValues = rawValues.filter((value) => !normalizeQuoteSymbol(value))
+        if (invalidValues.length) {
+          sendJson(res, 400, { error: 'symbols must be comma-separated IDX tickers such as BBCA or BBCA.JK.' })
+          return
+        }
+        symbols = [...new Set(rawValues.map(normalizeQuoteSymbol))]
+      }
+      const quotes = await loadQuotes(symbols)
+      sendJson(res, 200, { quotes, fetchedAt: new Date().toISOString(), source: 'Yahoo Finance chart API' })
+      return
+    }
+    if (url.pathname === '/api/chart') {
+      const request = normalizeChartRequest(url)
+      if (request.error) {
+        sendJson(res, 400, { error: request.error })
+        return
+      }
+      try {
+        const payload = await fetchChart(request.symbol, request.range, request.interval)
+        sendJson(res, 200, payload)
+      } catch (error) {
+        console.warn(`Chart request failed for ${request.symbol}`, error instanceof Error ? error.message : error)
+        sendJson(res, 502, { error: 'Chart data is temporarily unavailable from Yahoo Finance.' })
+      }
+      return
+    }
+    await serveStatic(res, url.pathname)
+  } catch (error) {
+    sendJson(res, 500, { error: error instanceof Error ? error.message : 'Server error' })
+  }
+})
+
+server.listen(port, host, () => {
+  console.log(`Stock analytics dashboard listening on http://${host}:${port}`)
+  console.log(`Forecast source: ${forecastPath}`)
+})
