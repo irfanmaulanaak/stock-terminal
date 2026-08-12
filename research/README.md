@@ -123,3 +123,24 @@ layers independent: sector context uses only `sector_articles` and `peer_article
 python3 research/sentiment_report.py /path/to/article-input.json
 python3 research/sentiment_report.py - --output /path/to/sentiment-report.json
 ```
+
+## Phase 8 abstention policy
+
+`research.abstention` applies deterministic safety gates to a proposed `UP`, `FLAT`, or `DOWN`
+forecast. It returns `ABSTAIN` with `status: insufficient_data` for missing, stale, unavailable, or
+invalid market data; partial data; inadequate history or numeric liquidity; suspension, limit-move,
+or corporate-action flags; unavailable required context; and a signal-conflict score strictly above
+the configured threshold. Missing safety inputs are preserved in `audit_inputs` and generate explicit
+reason codes; they are never replaced by an assumed safe value.
+
+Confidence and signal-conflict values use `[0, 1]`. Optional probabilities must contain exactly one
+value for each of `UP`, `FLAT`, and `DOWN`, each in `[0, 1]`, and sum to one. Required-context
+availability may be one boolean or a non-empty mapping of named contexts to booleans; its available
+fraction is reported as `coverage`. The snapshot contract also accepts `forecast: ABSTAIN` and
+optionally validates `probability_up`, `probability_flat`, and `probability_down` without making those
+fields mandatory for legacy archives.
+
+```sh
+python3 research/abstention_report.py /path/to/policy-input.json
+python3 research/abstention_report.py - --output /path/to/abstention-report.json
+```

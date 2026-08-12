@@ -63,6 +63,13 @@ Phase 6 adds a standard-library-only global regime report for global equities, V
 
 Phase 7 adds a standard-library-only, offline sentiment pipeline in `research/sentiment.py`. It canonicalizes and deduplicates timestamped articles, excludes future publications relative to an explicit `as_of`, applies transparent source/event/tone/impact/novelty rules, and reports independently supplied company, sector, Indonesia-market, and global layers. Empty layers are explicitly unavailable. The CLI is `research/sentiment_report.py`; sector aggregation consumes only sector and peer article arrays.
 
+Phase 8 adds the deterministic safety policy in `research/abstention.py`. A proposed directional forecast
+is actionable only when its data quality, required context, liquidity, history, trading-state flags, and
+signal-conflict score pass explicit gates; otherwise it becomes `ABSTAIN` with stable reason codes and
+audited inputs. Optional three-way probabilities are validated in `[0, 1]`. The CLI is
+`research/abstention_report.py`, and the snapshot contract permits `forecast: ABSTAIN` while keeping all
+new probability fields optional for older archives.
+
 Validate a checkpoint and optionally its manifest with:
 
 ```sh

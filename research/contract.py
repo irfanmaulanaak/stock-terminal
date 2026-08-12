@@ -34,6 +34,8 @@ DATA_QUALITY_FLAGS = ("stale", "missing", "partial", "invalid", "thin_liquidity"
                       "corporate_action_warning", "limit_move_warning", "suspension_warning")
 DATA_QUALITY_METRICS = ("age_seconds", "delay_seconds", "turnover", "volume_ratio", "range_percent")
 FORECAST_MODIFIERS = ("supportive", "neutral", "mixed", "reduced_conviction", "market_headwind", "insufficient_data")
+FORECASTS = ("UP", "FLAT", "DOWN", "ABSTAIN")
+PROBABILITY_FIELDS = ("probability_up", "probability_flat", "probability_down")
 
 
 class ValidationError(ValueError):
@@ -151,6 +153,23 @@ def validate_snapshot(snapshot: Any) -> None:
             errors.append(f"{prefix}.symbol duplicates {symbol!r}")
         else:
             seen.add(symbol)
+        if "forecast" in stock and stock.get("forecast") not in FORECASTS:
+            errors.append(f"{prefix}.forecast must be one of {FORECASTS}")
+        for key in PROBABILITY_FIELDS:
+            if key in stock:
+                value = stock[key]
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 1:
+                    errors.append(f"{prefix}.{key} must be a finite number in [0, 1]")
+        if "probabilities" in stock:
+            probabilities = stock["probabilities"]
+            if not isinstance(probabilities, Mapping):
+                errors.append(f"{prefix}.probabilities must be an object")
+            else:
+                for key in ("UP", "FLAT", "DOWN"):
+                    if key in probabilities:
+                        value = probabilities[key]
+                        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 1:
+                            errors.append(f"{prefix}.probabilities.{key} must be a finite number in [0, 1]")
         context = stock.get("sentiment_context")
         if not isinstance(context, Mapping):
             errors.append(f"{prefix}.sentiment_context must be an object")
